@@ -366,6 +366,55 @@ _bt_binsrch(Relation rel,
 	if (unlikely(high < low))
 		return low;
 
+
+
+/* ----------------------------------------------------------------
+ * Linear scan shortcut for tiny leaf pages
+ * Conditions:
+ *   - leaf page only
+ *   - number of data items in [2, btree_binsrch_linear_threshold]
+ *   - GUC btree_binsrch_linear = on
+ * Action:
+ *   - do a minimal ordered linear scan using _bt_compare()
+ *   - handle forward/backward correctly
+ *   - otherwise fall back to normal binary search
+ * ---------------------------------------------------------------- */
+if (P_ISLEAF(opaque) && btree_binsrch_linear)
+{
+    OffsetNumber first = P_FIRSTDATAKEY(opaque);
+    OffsetNumber last  = PageGetMaxOffsetNumber(page);
+    int          items = (last >= first) ? (last - first + 1) : 0;
+
+    /* enforce [2, threshold] */
+    if (items >= 2 && items <= btree_binsrch_linear_threshold)
+    {
+        /* same cutoff as the binary search loop uses */
+        int32        cmpval = key->nextkey ? 0 : 1;
+        OffsetNumber retLow = OffsetNumberNext(last); /* default: last+1 */
+        OffsetNumber i;
+
+        /* ordered linear scan to find first slot with compare < cmpval
+         * (i.e., forward: first >= / > ; backward: will return prev) */
+        for (i = first; i <= last; i = OffsetNumberNext(i))
+        {
+            int32 cmp = _bt_compare(rel, key, page, i);
+            if (cmp < cmpval)
+            {
+                retLow = i;
+                break;
+            }
+        }
+
+        /* match binary-search return semantics */
+        if (key->backward)
+            return OffsetNumberPrev(retLow);  /* may be 0, caller handles */
+        else
+            return retLow;
+    }
+}
+
+
+
 	/*
 	 * Binary search to find the first key on the page >= scan key, or first
 	 * key > scankey when nextkey is true.

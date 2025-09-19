@@ -227,7 +227,10 @@ typedef struct BTMetaPageData
 #define P_INCOMPLETE_SPLIT(opaque)	(((opaque)->btpo_flags & BTP_INCOMPLETE_SPLIT) != 0)
 #define P_HAS_FULLXID(opaque)	(((opaque)->btpo_flags & BTP_HAS_FULLXID) != 0)
 
+/* Extern declarations for experimental GUC variables */
 extern bool btree_leaf_prefetch;
+extern bool btree_binsrch_linear;
+extern int  btree_binsrch_linear_threshold;
 
 /*
  * BTDeletedPageData is the page contents of a deleted page

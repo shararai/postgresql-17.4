@@ -790,6 +790,15 @@ struct config_bool ConfigureNamesBool[] =
     	NULL, NULL, NULL
 	},
 	{
+		{"btree_binsrch_linear", PGC_USERSET, DEVELOPER_OPTIONS,
+			gettext_noop("Enable linear scan for tiny leaf pages."),
+			NULL,
+		},
+		&btree_binsrch_linear,
+		false,
+		NULL, NULL, NULL
+	},
+	{
 		{"enable_indexscan", PGC_USERSET, QUERY_TUNING_METHOD,
 			gettext_noop("Enables the planner's use of index-scan plans."),
 			NULL,
@@ -2044,6 +2053,18 @@ struct config_bool ConfigureNamesBool[] =
 
 struct config_int ConfigureNamesInt[] =
 {
+	{
+		{"btree_binsrch_linear_threshold", PGC_USERSET, DEVELOPER_OPTIONS,
+			gettext_noop("Threshold for tiny leaf pages (linear scan)."),
+			NULL,
+			0
+		},
+		&btree_binsrch_linear_threshold,
+		4,      /* default */
+		1,      /* min */
+		32,     /* max */
+		NULL, NULL, NULL
+	},
 	{
 		{"archive_timeout", PGC_SIGHUP, WAL_ARCHIVING,
 			gettext_noop("Sets the amount of time to wait before forcing a "
