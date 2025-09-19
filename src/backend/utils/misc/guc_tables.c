@@ -781,6 +781,15 @@ struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 	{
+    	{"btree_leaf_prefetch", PGC_USERSET, DEVELOPER_OPTIONS,
+        	gettext_noop("Enables leaf-page lookahead prefetch in btree index scans."),
+        	NULL
+    	},
+    	&btree_leaf_prefetch,
+    	false,                  
+    	NULL, NULL, NULL
+	},
+	{
 		{"enable_indexscan", PGC_USERSET, QUERY_TUNING_METHOD,
 			gettext_noop("Enables the planner's use of index-scan plans."),
 			NULL,

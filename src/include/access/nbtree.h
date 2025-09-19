@@ -227,6 +227,8 @@ typedef struct BTMetaPageData
 #define P_INCOMPLETE_SPLIT(opaque)	(((opaque)->btpo_flags & BTP_INCOMPLETE_SPLIT) != 0)
 #define P_HAS_FULLXID(opaque)	(((opaque)->btpo_flags & BTP_HAS_FULLXID) != 0)
 
+extern bool btree_leaf_prefetch;
+
 /*
  * BTDeletedPageData is the page contents of a deleted page
  */

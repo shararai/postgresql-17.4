@@ -1936,7 +1936,40 @@ _bt_readpage(IndexScanDesc scan, ScanDirection dir, OffsetNumber offnum,
 		so->currPos.lastItem = MaxTIDsPerBTreePage - 1;
 		so->currPos.itemIndex = MaxTIDsPerBTreePage - 1;
 	}
+	/*
+     * Leaf-page lookahead prefetch.
+     * Conditions:
+	 * 	GUC btree_leaf_prefetch is on
+     *  leaf page only
+     *  scan will continue in current direction 
+     */
+	if (btree_leaf_prefetch && P_ISLEAF(opaque))
+    {
+        bool continue_further =
+            (ScanDirectionIsForward(dir)  && so->currPos.moreRight) ||
+            (ScanDirectionIsBackward(dir) && so->currPos.moreLeft);
 
+        if (continue_further)
+        {
+            BlockNumber sib = InvalidBlockNumber;
+
+            if (ScanDirectionIsForward(dir))
+            {
+                if (!P_RIGHTMOST(opaque))
+                    sib = opaque->btpo_next;
+            }
+            else
+            {
+                if (!P_LEFTMOST(opaque))
+                    sib = opaque->btpo_prev;
+            }
+
+            if (BlockNumberIsValid(sib))
+            {
+                PrefetchBuffer(scan->indexRelation, MAIN_FORKNUM, sib);
+            }
+        }
+    }
 	return (so->currPos.firstItem <= so->currPos.lastItem);
 }
 
