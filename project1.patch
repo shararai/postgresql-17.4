@@ -1,0 +1,182 @@
+diff --git a/src/backend/access/nbtree/nbtsearch.c b/src/backend/access/nbtree/nbtsearch.c
+index e0bbb97..b3d1daa 100644
+--- a/src/backend/access/nbtree/nbtsearch.c
++++ b/src/backend/access/nbtree/nbtsearch.c
+@@ -366,6 +366,55 @@ _bt_binsrch(Relation rel,
+ 	if (unlikely(high < low))
+ 		return low;
+ 
++
++
++/* ----------------------------------------------------------------
++ * Linear scan shortcut for tiny leaf pages
++ * Conditions:
++ *   - leaf page only
++ *   - number of data items in [2, btree_binsrch_linear_threshold]
++ *   - GUC btree_binsrch_linear = on
++ * Action:
++ *   - do a minimal ordered linear scan using _bt_compare()
++ *   - handle forward/backward correctly
++ *   - otherwise fall back to normal binary search
++ * ---------------------------------------------------------------- */
++if (P_ISLEAF(opaque) && btree_binsrch_linear)
++{
++    OffsetNumber first = P_FIRSTDATAKEY(opaque);
++    OffsetNumber last  = PageGetMaxOffsetNumber(page);
++    int          items = (last >= first) ? (last - first + 1) : 0;
++
++    /* enforce [2, threshold] */
++    if (items >= 2 && items <= btree_binsrch_linear_threshold)
++    {
++        /* same cutoff as the binary search loop uses */
++        int32        cmpval = key->nextkey ? 0 : 1;
++        OffsetNumber retLow = OffsetNumberNext(last); /* default: last+1 */
++        OffsetNumber i;
++
++        /* ordered linear scan to find first slot with compare < cmpval
++         * (i.e., forward: first >= / > ; backward: will return prev) */
++        for (i = first; i <= last; i = OffsetNumberNext(i))
++        {
++            int32 cmp = _bt_compare(rel, key, page, i);
++            if (cmp < cmpval)
++            {
++                retLow = i;
++                break;
++            }
++        }
++
++        /* match binary-search return semantics */
++        if (key->backward)
++            return OffsetNumberPrev(retLow);  /* may be 0, caller handles */
++        else
++            return retLow;
++    }
++}
++
++
++
+ 	/*
+ 	 * Binary search to find the first key on the page >= scan key, or first
+ 	 * key > scankey when nextkey is true.
+@@ -1936,7 +1985,40 @@ _bt_readpage(IndexScanDesc scan, ScanDirection dir, OffsetNumber offnum,
+ 		so->currPos.lastItem = MaxTIDsPerBTreePage - 1;
+ 		so->currPos.itemIndex = MaxTIDsPerBTreePage - 1;
+ 	}
+-
++	/*
++     * Leaf-page lookahead prefetch.
++     * Conditions:
++	 * 	GUC btree_leaf_prefetch is on
++     *  leaf page only
++     *  scan will continue in current direction 
++     */
++	if (btree_leaf_prefetch && P_ISLEAF(opaque))
++    {
++        bool continue_further =
++            (ScanDirectionIsForward(dir)  && so->currPos.moreRight) ||
++            (ScanDirectionIsBackward(dir) && so->currPos.moreLeft);
++
++        if (continue_further)
++        {
++            BlockNumber sib = InvalidBlockNumber;
++
++            if (ScanDirectionIsForward(dir))
++            {
++                if (!P_RIGHTMOST(opaque))
++                    sib = opaque->btpo_next;
++            }
++            else
++            {
++                if (!P_LEFTMOST(opaque))
++                    sib = opaque->btpo_prev;
++            }
++
++            if (BlockNumberIsValid(sib))
++            {
++                PrefetchBuffer(scan->indexRelation, MAIN_FORKNUM, sib);
++            }
++        }
++    }
+ 	return (so->currPos.firstItem <= so->currPos.lastItem);
+ }
+ 
+diff --git a/src/backend/access/nbtree/nbtutils.c b/src/backend/access/nbtree/nbtutils.c
+index 878f4b2..46079db 100644
+--- a/src/backend/access/nbtree/nbtutils.c
++++ b/src/backend/access/nbtree/nbtutils.c
+@@ -32,6 +32,11 @@
+ #define LOOK_AHEAD_REQUIRED_RECHECKS 	3
+ #define LOOK_AHEAD_DEFAULT_DISTANCE 	5
+ 
++/* Experimental GUC variables for Project 1 */
++bool btree_leaf_prefetch = false;
++bool btree_binsrch_linear = false;
++int  btree_binsrch_linear_threshold = 4;
++
+ typedef struct BTSortArrayContext
+ {
+ 	FmgrInfo   *sortproc;
+diff --git a/src/backend/utils/misc/guc_tables.c b/src/backend/utils/misc/guc_tables.c
+index c42fccf..efff22f 100644
+--- a/src/backend/utils/misc/guc_tables.c
++++ b/src/backend/utils/misc/guc_tables.c
+@@ -780,6 +780,24 @@ struct config_bool ConfigureNamesBool[] =
+ 		true,
+ 		NULL, NULL, NULL
+ 	},
++	{
++    	{"btree_leaf_prefetch", PGC_USERSET, DEVELOPER_OPTIONS,
++        	gettext_noop("Enables leaf-page lookahead prefetch in btree index scans."),
++        	NULL
++    	},
++    	&btree_leaf_prefetch,
++    	false,                  
++    	NULL, NULL, NULL
++	},
++	{
++		{"btree_binsrch_linear", PGC_USERSET, DEVELOPER_OPTIONS,
++			gettext_noop("Enable linear scan for tiny leaf pages."),
++			NULL,
++		},
++		&btree_binsrch_linear,
++		false,
++		NULL, NULL, NULL
++	},
+ 	{
+ 		{"enable_indexscan", PGC_USERSET, QUERY_TUNING_METHOD,
+ 			gettext_noop("Enables the planner's use of index-scan plans."),
+@@ -2035,6 +2053,18 @@ struct config_bool ConfigureNamesBool[] =
+ 
+ struct config_int ConfigureNamesInt[] =
+ {
++	{
++		{"btree_binsrch_linear_threshold", PGC_USERSET, DEVELOPER_OPTIONS,
++			gettext_noop("Threshold for tiny leaf pages (linear scan)."),
++			NULL,
++			0
++		},
++		&btree_binsrch_linear_threshold,
++		4,      /* default */
++		1,      /* min */
++		32,     /* max */
++		NULL, NULL, NULL
++	},
+ 	{
+ 		{"archive_timeout", PGC_SIGHUP, WAL_ARCHIVING,
+ 			gettext_noop("Sets the amount of time to wait before forcing a "
+diff --git a/src/include/access/nbtree.h b/src/include/access/nbtree.h
+index 7493043..d31be3b 100644
+--- a/src/include/access/nbtree.h
++++ b/src/include/access/nbtree.h
+@@ -227,6 +227,11 @@ typedef struct BTMetaPageData
+ #define P_INCOMPLETE_SPLIT(opaque)	(((opaque)->btpo_flags & BTP_INCOMPLETE_SPLIT) != 0)
+ #define P_HAS_FULLXID(opaque)	(((opaque)->btpo_flags & BTP_HAS_FULLXID) != 0)
+ 
++/* Extern declarations for experimental GUC variables */
++extern bool btree_leaf_prefetch;
++extern bool btree_binsrch_linear;
++extern int  btree_binsrch_linear_threshold;
++
+ /*
+  * BTDeletedPageData is the page contents of a deleted page
+  */
